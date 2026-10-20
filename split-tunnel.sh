@@ -20,6 +20,7 @@ IPRANGES=()
 if [[ -n "$SPLITTUNNEL_IPRANGELIST" ]]; then
     IFS=',' read -r -a IPRANGES <<< "$SPLITTUNNEL_IPRANGELIST"
 fi
+ROUTES_VIP="$SPLITTUNNEL_VIP"
 
 # Outgoing interface on the parent host
 if [[ -z "${OUT_IF:-}" ]]; then
@@ -40,6 +41,33 @@ require_root() {
         echo "Please run as root" >&2
         exit 1
     fi
+}
+
+parse_routes_args() {
+    while (($#)); do
+        case "$1" in
+            --iprange)
+                if (($# < 2)) || [[ -z "$2" ]]; then
+                    echo "--iprange requires a CIDR" >&2
+                    return 2
+                fi
+                IFS=',' read -r -a IPRANGES <<< "$2"
+                shift 2
+                ;;
+            --vip)
+                if (($# < 2)) || [[ -z "$2" ]]; then
+                    echo "--vip requires an IPv4 address" >&2
+                    return 2
+                fi
+                ROUTES_VIP="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown routes option: $1" >&2
+                return 2
+                ;;
+        esac
+    done
 }
 
 ns_exists() {
@@ -241,7 +269,7 @@ configure_routes() {
         echo "Network namespace is not running" >&2
         exit 1
     fi
-    local vpn_vip="$SPLITTUNNEL_VIP"
+    local vpn_vip="$ROUTES_VIP"
     if [[ -z "$vpn_vip" ]]; then
         vpn_vip=$(ip netns exec "$NS" swanctl --list-sas | sed -nE 's/^[[:space:]]+local[[:space:]]+.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]$/\1/p')
         if [[ -z "$vpn_vip" ]]; then
@@ -327,7 +355,11 @@ esac
 
 case "${1:-}" in
     start)  start ;;
-    routes) configure_routes ;;
+    routes)
+        shift
+        parse_routes_args "$@"
+        configure_routes
+        ;;
     stop)   stop ;;
     status) status ;;
     exec)

@@ -7,14 +7,10 @@ Start the network namespace, then configure the VPN routes and SNAT rules:
 
 ./split-tunnel.sh exec ipsec start
 
-SPLITTUNNEL_IPRANGELIST=172.19.0.0/16 \
-./split-tunnel.sh routes
+./split-tunnel.sh routes --iprange 172.19.0.0/16 --vip 192.0.2.10
 ```
 
-`routes` sends each CIDR in the comma-separated `SPLITTUNNEL_IPRANGELIST`
-through the namespace and configures SNAT to `SPLITTUNNEL_VIP`. Use `./split-tunnel.sh exec COMMAND [ARG ...]` to run any command inside the configured namespace (the namespace name follows `NS`, default `st`). If it is unset
-or empty, `routes` uses the virtual IP reported by `swanctl --list-sas`. Run it
-after starting ipsec. Use `./split-tunnel.sh stop` to tear down the namespace
+`routes --iprange CIDR[,CIDR...]` sends each destination range through the namespace, and `--vip IPv4` sets the SNAT virtual IP. These options override `SPLITTUNNEL_IPRANGELIST` and `SPLITTUNNEL_VIP` respectively; the environment variables remain supported. If no VIP is set, `routes` uses the virtual IP reported by `swanctl --list-sas`. Run it after starting ipsec. Use `./split-tunnel.sh exec COMMAND [ARG ...]` to run any command inside the configured namespace (the namespace name follows `NS`, default `st`). Use `./split-tunnel.sh stop` to tear down the namespace
 and `./split-tunnel.sh status` to inspect it.
 
 `routes` saves the original IPv4 main-table routes for each destination under
