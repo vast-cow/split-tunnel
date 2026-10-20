@@ -318,7 +318,7 @@ require_root
 
 # Serialize state updates, including concurrent start/routes/stop invocations.
 case "${1:-}" in
-    start|routes|stop)
+    start|routes|stop|exec)
         mkdir -p "$STATE_DIR"
         exec 9>"${STATE_DIR}/.lock"
         flock -x 9
@@ -330,8 +330,16 @@ case "${1:-}" in
     routes) configure_routes ;;
     stop)   stop ;;
     status) status ;;
+    exec)
+        shift
+        if (($# == 0)); then
+            echo "Usage: $0 exec COMMAND [ARG ...]" >&2
+            exit 2
+        fi
+        ip netns exec "$NS" "$@"
+        ;;
     *)
-        echo "Usage: $0 {start|routes|stop|status}"
+        echo "Usage: $0 {start|routes|stop|status|exec COMMAND [ARG ...]}"
         exit 1
         ;;
 esac
