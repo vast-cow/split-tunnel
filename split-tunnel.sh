@@ -243,7 +243,7 @@ configure_routes() {
     fi
     local vpn_vip="$SPLITTUNNEL_VIP"
     if [[ -z "$vpn_vip" ]]; then
-        vpn_vip=$(swanctl --list-sas | sed -nE 's/^[[:space:]]+local[[:space:]]+.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]$/\1/p')
+        vpn_vip=$(ip netns exec "$NS" swanctl --list-sas | sed -nE 's/^[[:space:]]+local[[:space:]]+.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]$/\1/p')
         if [[ -z "$vpn_vip" ]]; then
             echo "Could not determine VPN virtual IP from swanctl --list-sas" >&2
             exit 1
