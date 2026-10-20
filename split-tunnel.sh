@@ -13,6 +13,14 @@ PREFIX="${PREFIX:-30}"
 # Destination CIDR to allow communication from the netns
 DEST_CIDR="${DEST_CIDR:-0.0.0.0/0}"
 
+# VPN virtual IP and comma-separated destination ranges to route through it
+SPLITTUNNEL_VIP="${SPLITTUNNEL_VIP:-}"
+SPLITTUNNEL_IPRANGELIST="${SPLITTUNNEL_IPRANGELIST:-}"
+IPRANGES=()
+if [[ -n "$SPLITTUNNEL_IPRANGELIST" ]]; then
+    IFS=',' read -r -a IPRANGES <<< "$SPLITTUNNEL_IPRANGELIST"
+fi
+
 # Outgoing interface on the parent host
 if [[ -z "${OUT_IF:-}" ]]; then
     OUT_IF=$(ip route get 8.8.8.8 | sed -n 's/.* dev \([^ ]*\).*/\1/p')
@@ -128,6 +136,32 @@ start() {
     status
 }
 
+configure_routes() {
+    if ! ns_exists || ! ip link show "$VETH_HOST" &>/dev/null; then
+        echo "Network namespace is not running" >&2
+        exit 1
+    fi
+    if [[ -z "$SPLITTUNNEL_VIP" ]]; then
+        echo "SPLITTUNNEL_VIP must be set" >&2
+        exit 1
+    fi
+    if ((${#IPRANGES[@]} == 0)); then
+        echo "SPLITTUNNEL_IPRANGELIST must contain at least one CIDR" >&2
+        exit 1
+    fi
+
+    for IPRANGE in "${IPRANGES[@]}"; do
+        [[ -n "$IPRANGE" ]] || continue
+        ip route replace "$IPRANGE" via "$NS_IP" dev "$VETH_HOST" mtu 1214
+        ip netns exec "$NS" "${IPT[@]}" -t nat -C POSTROUTING \
+            -s "${HOST_IP}/32" -d "$IPRANGE" -o "$VETH_NS" \
+            -j SNAT --to-source "$SPLITTUNNEL_VIP" 2>/dev/null || \
+        ip netns exec "$NS" "${IPT[@]}" -t nat -I POSTROUTING 1 \
+            -s "${HOST_IP}/32" -d "$IPRANGE" -o "$VETH_NS" \
+            -j SNAT --to-source "$SPLITTUNNEL_VIP"
+    done
+}
+
 stop() {
     # Delete only the rules that belong to this script
     del_rule nat "${nat_rule[@]}"
@@ -171,10 +205,11 @@ require_root
 
 case "${1:-}" in
     start)  start ;;
+    routes) configure_routes ;;
     stop)   stop ;;
     status) status ;;
     *)
-        echo "Usage: $0 {start|stop|status}"
+        echo "Usage: $0 {start|routes|stop|status}"
         exit 1
         ;;
 esac

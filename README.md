@@ -1,24 +1,18 @@
 # Split Tunnel
 
-```
-./netns.sh start
+Start the network namespace, then configure the VPN routes and SNAT rules:
+
+```sh
+./split-tunnel.sh start
+
+SPLITTUNNEL_VIP=192.168.249.15 \
+SPLITTUNNEL_IPRANGELIST=172.19.0.0/16 \
+./split-tunnel.sh routes
 
 ip netns exec splittunnel ipsec start
-
-ip -n ns-test a
-VIRTUALIP=192.168.249.15
-IPRANGES=(
-  "172.19.0.0/16"
-)
-
-for IPRANGE in "${IPRANGES[@]}"; do
-  ip route add "${IPRANGE}" via 10.200.0.2 dev splittunnel-host mtu 1214
-
-  ip netns exec splittunnel \
-    iptables -t nat -I POSTROUTING 1 \
-      -s 10.200.0.1/32 \
-      -d "${IPRANGE}" \
-      -o splittunnel-ns \
-      -j SNAT --to-source "${VIRTUALIP}"
-done
 ```
+
+`routes` sends each CIDR in the comma-separated `SPLITTUNNEL_IPRANGELIST`
+through the namespace and configures SNAT to `SPLITTUNNEL_VIP`. Run it after
+starting the namespace. Use `./split-tunnel.sh stop` to tear down the namespace
+and `./split-tunnel.sh status` to inspect it.
