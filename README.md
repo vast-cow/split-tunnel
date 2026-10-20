@@ -5,7 +5,7 @@ Start the network namespace, then configure the VPN routes and SNAT rules:
 ```sh
 ./split-tunnel.sh start
 
-ip netns exec splittunnel ipsec start
+ip netns exec st ipsec start
 
 SPLITTUNNEL_IPRANGELIST=172.19.0.0/16 \
 ./split-tunnel.sh routes
