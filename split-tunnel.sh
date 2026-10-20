@@ -13,7 +13,7 @@ PREFIX="${PREFIX:-30}"
 # Destination CIDR to allow communication from the netns
 DEST_CIDR="${DEST_CIDR:-0.0.0.0/0}"
 
-# VPN virtual IP and comma-separated destination ranges to route through it
+# VPN virtual IP override and comma-separated destination ranges
 SPLITTUNNEL_VIP="${SPLITTUNNEL_VIP:-}"
 SPLITTUNNEL_IPRANGELIST="${SPLITTUNNEL_IPRANGELIST:-}"
 IPRANGES=()
@@ -141,9 +141,13 @@ configure_routes() {
         echo "Network namespace is not running" >&2
         exit 1
     fi
-    if [[ -z "$SPLITTUNNEL_VIP" ]]; then
-        echo "SPLITTUNNEL_VIP must be set" >&2
-        exit 1
+    local vpn_vip="$SPLITTUNNEL_VIP"
+    if [[ -z "$vpn_vip" ]]; then
+        vpn_vip=$(swanctl --list-sas | sed -nE 's/^[[:space:]]+local[[:space:]]+.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]$/\1/p')
+        if [[ -z "$vpn_vip" ]]; then
+            echo "Could not determine VPN virtual IP from swanctl --list-sas" >&2
+            exit 1
+        fi
     fi
     if ((${#IPRANGES[@]} == 0)); then
         echo "SPLITTUNNEL_IPRANGELIST must contain at least one CIDR" >&2
@@ -155,10 +159,10 @@ configure_routes() {
         ip route replace "$IPRANGE" via "$NS_IP" dev "$VETH_HOST" mtu 1214
         ip netns exec "$NS" "${IPT[@]}" -t nat -C POSTROUTING \
             -s "${HOST_IP}/32" -d "$IPRANGE" -o "$VETH_NS" \
-            -j SNAT --to-source "$SPLITTUNNEL_VIP" 2>/dev/null || \
+            -j SNAT --to-source "$vpn_vip" 2>/dev/null || \
         ip netns exec "$NS" "${IPT[@]}" -t nat -I POSTROUTING 1 \
             -s "${HOST_IP}/32" -d "$IPRANGE" -o "$VETH_NS" \
-            -j SNAT --to-source "$SPLITTUNNEL_VIP"
+            -j SNAT --to-source "$vpn_vip"
     done
 }
 
