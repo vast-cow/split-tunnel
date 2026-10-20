@@ -31,6 +31,7 @@ TAG="netns-${NS}"
 
 STATE_DIR="/run/netns-veth"
 STATE_FILE="${STATE_DIR}/${NS}.state"
+ROUTES_DIR="${STATE_DIR}/${NS}.routes"
 
 IPT=(iptables -w)
 
@@ -83,7 +84,7 @@ nat_rule=(
 )
 
 start() {
-    if ns_exists || [[ -e "$STATE_FILE" ]] ||
+    if ns_exists || [[ -e "$STATE_FILE" || -e "$ROUTES_DIR" ]] ||
        ip link show "$VETH_HOST" &>/dev/null; then
         echo "Existing netns or configuration found" >&2
         exit 1
@@ -136,6 +137,105 @@ start() {
     status
 }
 
+# Normalize IPv4 CIDRs so equivalent inputs share the same saved state.
+normalize_cidr() {
+    local address prefix a b c d octet number mask
+    IFS=/ read -r address prefix <<< "$1"
+    prefix="${prefix:-32}"
+    [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ &&
+       "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+    prefix=$((10#$prefix))
+    ((prefix <= 32)) || return 1
+    IFS=. read -r a b c d <<< "$address"
+    for octet in "$a" "$b" "$c" "$d"; do
+        ((${#octet} <= 3 && 10#$octet <= 255)) || return 1
+    done
+    number=$(((10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d))
+    mask=$(((0xffffffff << (32 - prefix)) & 0xffffffff))
+    number=$((number & mask))
+    printf '%d.%d.%d.%d/%d\n' \
+        "$((number >> 24))" "$(((number >> 16) & 255))" \
+        "$(((number >> 8) & 255))" "$((number & 255))" "$prefix"
+}
+
+route_snapshot() {
+    ip -4 -o route show table main exact "$1" | LC_ALL=C sort
+}
+
+configure_route() {
+    local cidr="$1" entry current temporary
+    entry="${ROUTES_DIR}/${cidr//\//_}"
+    current=$(route_snapshot "$cidr")
+    mkdir -p "$ROUTES_DIR"
+    if [[ ! -d "$entry" ]]; then
+        temporary=$(mktemp -d "${ROUTES_DIR}/.pending.XXXXXX")
+        printf '%s\n' "$cidr" > "$temporary/cidr"
+        route_snapshot "$cidr" > "$temporary/before"
+        ip -4 route save table main exact "$cidr" > "$temporary/original"
+        mv "$temporary" "$entry"
+    elif [[ -f "$entry/after" ]]; then
+        if [[ "$current" != "$(cat "$entry/after")" ]]; then
+            echo "Route changed outside this script: $cidr; saved state retained" >&2
+            return 1
+        fi
+        # Preserve the first snapshot across repeated routes invocations.
+        return 0
+    elif [[ "$current" != "$(cat "$entry/before")" ]]; then
+        echo "Incomplete route update for $cidr; saved state retained" >&2
+        return 1
+    fi
+
+    ip -4 route replace "$cidr" via "$NS_IP" dev "$VETH_HOST" mtu 1214
+    route_snapshot "$cidr" > "$entry/after.tmp"
+    mv "$entry/after.tmp" "$entry/after"
+}
+
+restore_routes() {
+    [[ -d "$ROUTES_DIR" ]] || return 0
+    local entry cidr current before after remaining line
+    local -a route_args
+    for entry in "$ROUTES_DIR"/*; do
+        [[ -d "$entry" ]] || continue
+        cidr=$(cat "$entry/cidr") || return 1
+        current=$(route_snapshot "$cidr") || return 1
+        before=$(cat "$entry/before") || return 1
+        if [[ "$current" == "$before" ]]; then
+            rm -r "$entry" || return 1
+            continue
+        fi
+        if [[ ! -f "$entry/after" ]]; then
+            echo "Incomplete route update for $cidr; saved state retained" >&2
+            return 1
+        fi
+        after=$(cat "$entry/after") || return 1
+        remaining=$(LC_ALL=C comm -12 "$entry/before" "$entry/after") || return 1
+        # Permit retry after deletion succeeded but restore failed.
+        if [[ "$current" != "$after" &&
+              ! ( -f "$entry/restoring" && "$current" == "$remaining" ) ]]; then
+            echo "Route changed outside this script: $cidr; stop aborted, saved state retained" >&2
+            return 1
+        fi
+        if [[ "$current" == "$after" ]]; then
+            LC_ALL=C comm -13 "$entry/before" "$entry/after" > "$entry/added" || return 1
+            touch "$entry/restoring" || return 1
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                read -r -a route_args <<< "$line"
+                ip -4 route del "${route_args[@]}" || return 1
+            done < "$entry/added"
+        fi
+        ip -4 route restore < "$entry/original" || return 1
+        current=$(route_snapshot "$cidr") || return 1
+        if [[ "$current" != "$before" ]]; then
+            echo "Route restoration incomplete for $cidr; saved state retained" >&2
+            return 1
+        fi
+        rm -r "$entry" || return 1
+    done
+    # Unpublished snapshots never preceded a route change.
+    rm -rf "$ROUTES_DIR"
+}
+
 configure_routes() {
     if ! ns_exists || ! ip link show "$VETH_HOST" &>/dev/null; then
         echo "Network namespace is not running" >&2
@@ -156,7 +256,13 @@ configure_routes() {
 
     for IPRANGE in "${IPRANGES[@]}"; do
         [[ -n "$IPRANGE" ]] || continue
-        ip route replace "$IPRANGE" via "$NS_IP" dev "$VETH_HOST" mtu 1214
+        local cidr
+        cidr=$(normalize_cidr "$IPRANGE") || {
+            echo "Invalid IPv4 CIDR: $IPRANGE" >&2
+            return 1
+        }
+        IPRANGE="$cidr"
+        configure_route "$IPRANGE"
         ip netns exec "$NS" "${IPT[@]}" -t nat -C POSTROUTING \
             -s "${HOST_IP}/32" -d "$IPRANGE" -o "$VETH_NS" \
             -j SNAT --to-source "$vpn_vip" 2>/dev/null || \
@@ -167,6 +273,9 @@ configure_routes() {
 }
 
 stop() {
+    # Keep the namespace and veth available if restoration fails.
+    restore_routes || return 1
+
     # Delete only the rules that belong to this script
     del_rule nat "${nat_rule[@]}"
     del_rule filter "${forward_out[@]}"
@@ -206,6 +315,15 @@ status() {
 }
 
 require_root
+
+# Serialize state updates, including concurrent start/routes/stop invocations.
+case "${1:-}" in
+    start|routes|stop)
+        mkdir -p "$STATE_DIR"
+        exec 9>"${STATE_DIR}/.lock"
+        flock -x 9
+        ;;
+esac
 
 case "${1:-}" in
     start)  start ;;
