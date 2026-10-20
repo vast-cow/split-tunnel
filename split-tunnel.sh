@@ -63,7 +63,7 @@ parse_routes_args() {
                 shift 2
                 ;;
             *)
-                echo "Unknown routes option: $1" >&2
+                echo "Unknown config option: $1" >&2
                 return 2
                 ;;
         esac
@@ -240,7 +240,7 @@ restore_routes() {
         # Permit retry after deletion succeeded but restore failed.
         if [[ "$current" != "$after" &&
               ! ( -f "$entry/restoring" && "$current" == "$remaining" ) ]]; then
-            echo "Route changed outside this script: $cidr; stop aborted, saved state retained" >&2
+            echo "Route changed outside this script: $cidr; delete aborted, saved state retained" >&2
             return 1
         fi
         if [[ "$current" == "$after" ]]; then
@@ -344,9 +344,9 @@ status() {
 
 require_root
 
-# Serialize state updates, including concurrent start/routes/stop invocations.
+# Serialize state updates, including concurrent create/config/delete invocations.
 case "${1:-}" in
-    start|routes|stop|exec)
+    create|config|delete|exec)
         mkdir -p "$STATE_DIR"
         exec 9>"${STATE_DIR}/.lock"
         flock -x 9
@@ -354,13 +354,13 @@ case "${1:-}" in
 esac
 
 case "${1:-}" in
-    start)  start ;;
-    routes)
+    create) start ;;
+    config)
         shift
         parse_routes_args "$@"
         configure_routes
         ;;
-    stop)   stop ;;
+    delete) stop ;;
     status) status ;;
     exec)
         shift
@@ -371,7 +371,7 @@ case "${1:-}" in
         ip netns exec "$NS" "$@"
         ;;
     *)
-        echo "Usage: $0 {start|routes|stop|status|exec COMMAND [ARG ...]}"
+        echo "Usage: $0 {create|config|delete|status|exec COMMAND [ARG ...]}"
         exit 1
         ;;
 esac
