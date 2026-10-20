@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 # ===== Configuration =====
-NS="${NS:-splittunnel}"
-VETH_HOST="${VETH_HOST:-splittunnel-host}"
-VETH_NS="${VETH_NS:-splittunnel-ns}"
+NS="${NS:-st}"
+VETH_HOST="${VETH_HOST:-st-host}"
+VETH_NS="${VETH_NS:-st-ns}"
 
 HOST_IP="${HOST_IP:-10.200.0.1}"
 NS_IP="${NS_IP:-10.200.0.2}"
